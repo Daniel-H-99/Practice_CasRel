@@ -30,6 +30,7 @@ def extract_items(model, tokenizer, data_point, id2rel, h_bar=0.5, t_bar=0.5):
     segment_ids = encoded_input['token_type_ids'].cuda()
     attention_mask = encoded_input['attention_mask'].cuda()
 
+    assert token_ids.size()[0] == 1
     if len(token_ids[0]) > BERT_MAX_LEN:
         token_ids = token_ids[:,:BERT_MAX_LEN]
         segment_ids = segment_ids[:,:BERT_MAX_LEN]
@@ -37,27 +38,51 @@ def extract_items(model, tokenizer, data_point, id2rel, h_bar=0.5, t_bar=0.5):
 
     bert_embedding = model.get_embedding(token_ids, segment_ids, attention_mask)
 
-    # TODO: fill subjects
-    # HINT: sub_head and sub_tail are np.array of int
-
-    ### YOUR CODE ###
-
-    subjects = []
+    subjects = []      # list of subject words
+    
+    # extract indice of candidates for start/end spots
+    
+    preds_sub_head, preds_sub_tail = model.tag_subject(bert_embedding)
+    sub_heads = (preds_sub_head >= h_bar).squeeze(0).nonzero().squeeze(1).cpu().numpy()     # extract indice of possible start/end spots   
+    sub_tails = (preds_sub_tail >= t_bar).squeeze(0).nonzero().squeeze(1).cpu().numpy()
+    sub_head_batch = [] 
+    sub_tail_batch = []
     for sub_head in sub_heads:
         sub_tail = sub_tails[sub_tails >= sub_head]
         if len(sub_tail) > 0:
             sub_tail = sub_tail[0]
-
             ### YOUR CODE ###
-
+            sub_tokens = tokenizer.convert_ids_to_tokens(token_ids[0, sub_head:sub_tail + 1])
+            sub_words = tokenizer.convert_tokens_to_string(sub_tokens).replace(' [unused1] ', ' ').replace(' [unused1]', '').replace('[unused1] ', '')
+            subjects.append(sub_words)
+            sub_head_batch.append(sub_head)
+            sub_tail_batch.append(sub_tail)
+            
+    # for each subjects, find corresponding tripples (s, r, o)
     if subjects:
         triple_list = []
-
-        # TODO: fill triple_list with (subject, relation, object) tuples
+        
         # e.g. triple_list = [("Bananaman", "creator", "Bright"), ("Bananaman", "starring", "Brooke-Taylor"), ...]
 
-        ### YOUR CODE ###
-
+        sub_head_batch, sub_tail_batch = torch.Tensor([sub_head_batch]).type(torch.LongTensor), torch.Tensor([sub_tail_batch]).type(torch.LongTensor)
+        pred_obj_heads, pred_obj_tails = model.tag_object(bert_embedding, sub_head_batch, sub_tail_batch)   # predict probs for objects
+        pred_obj_heads, pred_obj_tails = (pred_obj_heads.transpose(1, 2) >= h_bar), (pred_obj_tails.transpose(1, 2) >= t_bar)    # (num_subject x num_rel x num_tokens)
+        d = pred_obj_heads.size()
+        assert len(d) == 3
+        assert d[0] == len(subjects)
+        for sub_index in range(d[0]):     # select subject
+            sub_words = subjects[sub_index]
+            for rel_index in range(d[1]):     # select relation
+                rel_words = id2rel[rel_index]
+                obj_heads, obj_tails = pred_obj_heads[sub_index][rel_index].nonzero().squeeze(1).cpu().numpy(), pred_obj_heads[sub_index][rel_index].nonzero().squeeze(1).cpu().numpy()     # extract candidates for object start/end spots
+                for obj_head in obj_heads:
+                    obj_tail = obj_tails[obj_tails >= obj_head]
+                    if len(obj_tail) > 0:
+                        obj_tail = obj_tail[0]
+                        obj_tokens = tokenizer.convert_ids_to_tokens(token_ids[0, obj_head:obj_tail + 1])
+                        obj_words = tokenizer.convert_tokens_to_string(obj_tokens).replace(' [unused1] ', ' ').replace(' [unused1]', '').replace('[unused1] ', '')
+                        triple_list.append((sub_words, rel_words, obj_words))    
+        
         return triple_list
     else:
         return []
@@ -104,8 +129,14 @@ def metric(model, eval_data, id2rel, tokenizer, exact_match=False, output_path=N
     if output_path:
         F.close()
 
-    # TODO: compute precision, recall, f1_score from correct_num and predict_num
-
-    ### YOUR CODE ###
-
+    # compute precision, recall, f1_score from correct_num and predict_num
+    
+    TP = correct_num
+    FN = gold_num - correct_num
+    FP = predict_num - correct_num
+    
+    precision = TP / (TP + FP)
+    recall = TP / (TP + FN)
+    f1_score = 2 / (1 / precision + 1 / recall)
+    
     return precision, recall, f1_score

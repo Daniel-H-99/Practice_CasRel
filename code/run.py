@@ -14,7 +14,8 @@ from utils import set_seed, str2bool
 parser = argparse.ArgumentParser()
 
 parser.add_argument('--train', type=str2bool)
-
+parser.add_argument('--trained_epochs', type=int, default=0)
+parser.add_argument('--ckpt', type=str, default='NYT_best_model')
 parser.add_argument('--dataset', type=str)
 parser.add_argument('--max_sentences', type=int)
 parser.add_argument('--max_tokens', type=int)
@@ -67,7 +68,12 @@ if args.train:
     best_val_f1 = -np.Inf
     best_test_f1 = -np.Inf
 
-    for epoch in range(1, args.epochs+1):
+    if args.trained_epochs:
+        best_state_dict = torch.load(f'{args.ckpt_path}/{args.ckpt}.ckpt')
+        model.load_state_dict(best_state_dict)
+        print(f'model loaded from {args.ckpt_path}/{args.ckpt}')
+        
+    for epoch in range(args.trained_epochs + 1, args.epochs+1):
         print(f'Epoch: {epoch}')
         model.train()
         for data_batch in tqdm(train_loader):
@@ -105,10 +111,13 @@ if args.train:
             loss.backward()
             optimizer.step()
 
+
         model.eval()
+
         val_prec, val_rec, val_f1 = metric(model, dev_data, id2rel, tokenizer, exact_match=args.exact_match)
         test_prec, test_rec, test_f1 = metric(model, test_data, id2rel, tokenizer, exact_match=args.exact_match)
 
+        
         if np.greater(val_f1, best_val_f1 + args.min_delta) or np.greater(args.min_delta, val_f1):
             best_val_prec = val_prec
             best_val_rec = val_rec
@@ -118,7 +127,7 @@ if args.train:
             report_test_f1 = test_f1
 
             torch.save(model.state_dict(), f'{args.ckpt_path}/{args.dataset}_best_model.ckpt')
-        
+            
         if np.greater(test_f1, best_test_f1 + args.min_delta) or np.greater(args.min_delta, test_f1):
             best_test_f1 = test_f1
         
@@ -129,7 +138,7 @@ if args.train:
                         + f'{best_test_f1:.5f}\n')
 
         print(f'f1: {val_f1:.4f}, best f1: {best_val_f1:.4f}, test f1: {report_test_f1:.4f}, best test f1: {best_test_f1:.4f}\n')
-
+        torch.save(model.state_dict(), f'{args.ckpt_path}/{args.dataset}_tmp.ckpt')
 else:
     best_state_dict = torch.load(f'{args.ckpt_path}/{args.dataset}_best_model.ckpt')
     model.load_state_dict(best_state_dict)
@@ -139,7 +148,8 @@ else:
         test_result_path = f'{args.results_path}/{args.dataset}_test_result.json'
     else:
         test_result_path = None
-
+        
+#     val_prec, val_rec, val_f1 = metric(model, dev_data, id2rel, tokenizer, exact_match=args.exact_match)
     test_prec, test_rec, test_f1 = metric(model, test_data, id2rel, tokenizer, exact_match=args.exact_match, output_path=test_result_path)
-
+#     print(f'f1: {val_f1:.4f}, test f1: {test_f1:.4f}, val prec: {val_prec:.4f}, test_prec: {test_prec:.4f}, val rec: {val_rec:.4f}, test rec: {test_rec:.4f}\n')
     print(f'test precision: {test_prec:.4f}, test recall: {test_rec:.4f}, test f1: {test_f1:.4f}')
